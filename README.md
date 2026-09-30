@@ -119,7 +119,7 @@ npx supabase start
 ### 3. 환경 변수
 
 ```bash
-cp .env.example .env.local
+cp .env .env.local
 ```
 
 | 변수 | 필수 | 설명 |
