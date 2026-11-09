@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "커넥트노트 수집기",
+  "version": "0.5.1",
+  "description": "로그인된 네이버 블로그 통계·애드포스트·브랜드 커넥트 화면에서 방문자 수·수익과 쇼핑 커넥트 상품·발급 링크를 읽어 커넥트노트로 보냅니다.",
+  "permissions": ["storage", "alarms", "scripting"],
+  "host_permissions": ["http://localhost:3000/*", "http://localhost:3100/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "커넥트노트",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://admin.blog.naver.com/*",
+        "https://blog.stat.naver.com/*",
+        "https://adpost.naver.com/*",
+        "https://*.adpost.naver.com/*",
+        "https://brandconnect.naver.com/*",
+        "https://*.brandconnect.naver.com/*"
+      ],
+      "js": ["capture.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://admin.blog.naver.com/*",
+        "https://blog.stat.naver.com/*",
+        "https://adpost.naver.com/*",
+        "https://*.adpost.naver.com/*",
+        "https://brandconnect.naver.com/*",
+        "https://*.brandconnect.naver.com/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://brandconnect.naver.com/*", "https://*.brandconnect.naver.com/*"],
+      "js": ["automate.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://blog.naver.com/*"],
+      "js": ["blog-writer.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["http://localhost:3000/*", "http://localhost:3100/*"],
+      "js": ["app-bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

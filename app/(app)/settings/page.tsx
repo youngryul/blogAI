@@ -1,13 +1,17 @@
 import type { Metadata } from "next"
 import { revalidatePath } from "next/cache"
+import { headers } from "next/headers"
+import { ExtensionTokenForm } from "@/components/blog/extension-token-form"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { PageHeader } from "@/components/layout/page-header"
+import { BlogLinkForm } from "@/components/blog/blog-link-form"
 import { DEFAULT_DISCLOSURE } from "@/lib/constants"
 import { aiConfig, isAIMockMode } from "@/lib/env"
+import { getLinkedBlogId } from "@/lib/naver/blog"
 import { createClient } from "@/lib/supabase/server"
 import type { AIUsageRow, ProfileRow } from "@/types"
 
@@ -19,6 +23,7 @@ async function updateProfile(formData: FormData) {
   const { data } = await supabase.auth.getUser()
   if (!data.user) return
   const displayName = String(formData.get("displayName") ?? "").trim().slice(0, 50)
+  // profiles 는 다른 서비스와 공유 중(nickname 필수)이라 새 행을 만들지 않고, 있는 행만 수정
   await supabase.from("profiles").update({ display_name: displayName || null }).eq("id", data.user.id)
   revalidatePath("/settings")
 }
@@ -30,13 +35,21 @@ export default async function SettingsPage() {
   monthStart.setDate(1)
   monthStart.setHours(0, 0, 0, 0)
 
-  const [{ data: profile }, { data: usage }] = await Promise.all([
+  const requestHeaders = await headers()
+  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000"
+  const proto = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https")
+  const appUrl = `${proto}://${host}`
+
+  const [{ data: profile }, { data: usage }, linkedBlogId, { data: extToken }] = await Promise.all([
     supabase.from("profiles").select("*").eq("id", userData.user?.id ?? "").maybeSingle(),
     supabase
       .from("ai_usage")
       .select("action, model, input_tokens, output_tokens, image_count, estimated_cost")
       .gte("created_at", monthStart.toISOString()),
+    getLinkedBlogId(supabase, userData.user?.id),
+    supabase.from("extension_tokens").select("last_used_at").maybeSingle(),
   ])
+  const extension = extToken as { last_used_at: string | null } | null
 
   const rows = (usage ?? []) as Pick<
     AIUsageRow,
@@ -72,6 +85,28 @@ export default async function SettingsPage() {
               </div>
               <Button type="submit">저장</Button>
             </form>
+          </CardContent>
+        </Card>
+
+        <Card id="blog" className="scroll-mt-20">
+          <CardHeader>
+            <CardTitle>네이버 블로그 연결</CardTitle>
+            <CardDescription>Dashboard에 방문자 수와 최근 게시물 수를 표시합니다.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <BlogLinkForm currentBlogId={linkedBlogId} />
+          </CardContent>
+        </Card>
+
+        <Card id="extension" className="scroll-mt-20">
+          <CardHeader>
+            <CardTitle>크롬 확장 프로그램 연결</CardTitle>
+            <CardDescription>
+              로그인된 네이버 화면에서 방문자 수·애드포스트·브랜드 커넥트 수익을 가져옵니다. 설치 방법은 extension/README.md 참고.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ExtensionTokenForm connected={Boolean(extension)} lastUsedAt={extension?.last_used_at ?? null} appUrl={appUrl} />
           </CardContent>
         </Card>
 

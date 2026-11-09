@@ -294,3 +294,29 @@ export interface ContentListItem {
   product: { id: string; name: string } | null
   keyword: { main_keyword: string } | null
 }
+
+// ---------------------------------------------------------------------------
+// 브랜드 커넥트(쇼핑 커넥트) 상품 — 크롬 확장 프로그램이 수집
+// ---------------------------------------------------------------------------
+export const CONNECT_PRODUCT_SOURCES = ["popular", "recommended", "search"] as const
+export type ConnectProductSource = (typeof CONNECT_PRODUCT_SOURCES)[number]
+
+export interface ConnectProductRow {
+  id: string
+  user_id: string
+  product_key: string
+  name: string
+  price: number | null
+  commission_rate: number | null
+  image_url: string | null
+  product_url: string | null
+  store_name: string | null
+  category: string | null
+  source: ConnectProductSource
+  rank: number | null
+  affiliate_url: string | null
+  link_issued_at: string | null
+  page_url: string | null
+  seen_at: string
+  created_at: string
+}

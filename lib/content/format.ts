@@ -237,6 +237,60 @@ export function toHtmlAll(final: FinalContent, options: CopyOptions = {}): strin
   return parts.join("\n")
 }
 
+// ---------------------------------------------------------------------------
+// 블로그 에디터 자동 입력용 블록 — 확장 프로그램이 순서대로 붙여넣는다.
+// SmartEditor 는 HTML 속 외부 <img> 를 잘 받지 않으므로 이미지는 별도 블록(파일 업로드)으로 나눈다.
+// ---------------------------------------------------------------------------
+export type EditorBlock =
+  | { type: "html"; html: string; text: string }
+  | { type: "image"; url: string; alt: string; fileName: string }
+
+export function toEditorBlocks(final: FinalContent): EditorBlock[] {
+  const blocks: EditorBlock[] = []
+  let html: string[] = []
+  let text: string[] = []
+  const flush = () => {
+    if (html.length) blocks.push({ type: "html", html: html.join("\n"), text: text.join("\n\n") })
+    html = []
+    text = []
+  }
+  const add = (h: string, t: string) => {
+    html.push(h)
+    text.push(t)
+  }
+
+  const disclosureHtml = `<p style="color:#666;font-size:13px;">${escapeHtml(final.disclosure)}</p>`
+  if (final.disclosure && final.disclosurePosition === "top") add(disclosureHtml, final.disclosure)
+  if (final.intro) add(paragraphsToHtml(final.intro), final.intro)
+
+  let imageIndex = 0
+  for (const section of final.sections) {
+    add(`<h3><b>${escapeHtml(section.heading)}</b></h3>`, `■ ${section.heading}`)
+    if (section.imageUrl) {
+      flush()
+      imageIndex += 1
+      const ext = section.imageUrl.split("?")[0].match(/\.(png|jpe?g|webp|gif)$/i)?.[1] ?? "png"
+      blocks.push({ type: "image", url: section.imageUrl, alt: section.imageAlt, fileName: `image-${imageIndex}.${ext}` })
+    }
+    add(paragraphsToHtml(section.body), section.body)
+    if (section.cta) {
+      add(
+        `<p>${escapeHtml(section.cta.text)}<br><a href="${escapeHtml(section.cta.url)}" target="_blank" rel="noopener noreferrer sponsored"><b>👉 ${escapeHtml(section.cta.label)}</b></a></p>`,
+        `${section.cta.text}\n👉 ${section.cta.label}: ${section.cta.url}`,
+      )
+    }
+  }
+
+  if (final.conclusion) add(paragraphsToHtml(final.conclusion), final.conclusion)
+  if (final.disclosure && final.disclosurePosition === "bottom") add(disclosureHtml, final.disclosure)
+  if (final.hashtags.length) {
+    const tags = formatHashtags(final.hashtags)
+    add(`<p>${escapeHtml(tags)}</p>`, tags)
+  }
+  flush()
+  return blocks
+}
+
 /** 본문 전체 글자 수 (공백 포함) */
 export function countBodyChars(content: Pick<BlogContent, "intro" | "sections" | "conclusion">): number {
   return (

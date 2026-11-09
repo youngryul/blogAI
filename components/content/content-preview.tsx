@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   AlertCircle,
   ArrowLeft,
@@ -12,6 +12,7 @@ import {
   Heading,
   Link2,
   Loader2,
+  PenSquare,
   Send,
   Text,
 } from "lucide-react"
@@ -28,9 +29,12 @@ import { StatusBadge } from "@/components/content/status-badge"
 import { useContentBundle, useRefreshContent } from "@/hooks/use-content"
 import { apiFetch, errorMessage } from "@/lib/api/client"
 import { copyRich, copyText } from "@/lib/clipboard"
+import { useConnectExtension, versionAtLeast, type WritePostBlock } from "@/hooks/use-connect-extension"
+import { createClient } from "@/lib/supabase/client"
 import {
   buildFinalContent,
   formatHashtags,
+  toEditorBlocks,
   splitParagraphs,
   toHtmlAll,
   toHtmlBody,
@@ -50,6 +54,57 @@ export function ContentPreview({ contentId }: { contentId: string }) {
   const [publishing, setPublishing] = useState(false)
 
   const final = useMemo(() => (bundle ? buildFinalContent(bundle) : null), [bundle])
+  const extension = useConnectExtension()
+  const canAutoWrite = versionAtLeast(extension.version, "0.5.0")
+  const [writing, setWriting] = useState(false)
+  // 자동 작성 후 사용자가 발행하면 확장 프로그램이 기록한다 → 그동안 발행 기록을 주기적으로 새로 불러온다
+  const [watchPublish, setWatchPublish] = useState<number | null>(null)
+  const publishedCount = bundle?.publishedPosts.length ?? 0
+
+  useEffect(() => {
+    if (watchPublish === null) return
+    if (publishedCount > watchPublish) {
+      setWatchPublish(null)
+      toast.success("발행을 확인해 기록했어요.")
+      return
+    }
+    const startedAt = Date.now()
+    const timer = setInterval(() => {
+      if (Date.now() - startedAt > 30 * 60_000) setWatchPublish(null)
+      else void refresh()
+    }, 10_000)
+    return () => clearInterval(timer)
+  }, [watchPublish, publishedCount, refresh])
+
+  async function autoWrite() {
+    if (!final) return
+    setWriting(true)
+    try {
+      // 이미지는 data URL 로 바꿔 확장 프로그램에 넘긴다 (에디터에 파일로 붙여넣기 위함)
+      const blocks: WritePostBlock[] = []
+      for (const block of toEditorBlocks(final)) {
+        if (block.type === "html") blocks.push(block)
+        else blocks.push({ type: "image", dataUrl: await toDataUrl(block.url), fileName: block.fileName, alt: block.alt })
+      }
+      const supabase = createClient()
+      const { data: settings } = await supabase.from("user_settings").select("naver_blog_id").maybeSingle()
+      toast.info("네이버 블로그 글쓰기 화면을 열어 내용을 채우는 중이에요…")
+      const result = await extension.writePost({
+        contentId,
+        blogId: (settings?.naver_blog_id as string | null | undefined) ?? null,
+        title: final.title,
+        blocks,
+      })
+      if (!result.ok) return toast.error(`자동 작성 실패: ${result.message ?? "알 수 없는 오류"}`)
+      if (result.message) toast.warning(result.message)
+      toast.success("블로그에 내용을 채웠어요. 글쓰기 탭에서 확인한 뒤 '발행'을 눌러 주세요.")
+      setWatchPublish(publishedCount)
+    } catch (e) {
+      toast.error(`자동 작성 실패: ${errorMessage(e)}`)
+    } finally {
+      setWriting(false)
+    }
+  }
 
   async function doCopy(key: string, action: () => Promise<void>, label: string) {
     try {
@@ -137,6 +192,32 @@ export function ContentPreview({ contentId }: { contentId: string }) {
 
         {/* 복사 패널 */}
         <aside className="space-y-4 lg:sticky lg:top-6 lg:h-fit">
+          <Card>
+            <CardHeader>
+              <CardTitle>네이버 블로그 자동 작성</CardTitle>
+              <CardDescription>
+                글쓰기 화면을 열어 제목·본문·사진·해시태그를 채워 둡니다. 내용을 확인한 뒤 &lsquo;발행&rsquo;만 직접 눌러 주세요.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Button className="w-full" onClick={autoWrite} disabled={!canAutoWrite || writing}>
+                {writing ? <Loader2 className="animate-spin" /> : <PenSquare />}
+                {writing ? "블로그에 채우는 중…" : "블로그에 자동 작성"}
+              </Button>
+              {!canAutoWrite && (
+                <p className="text-xs text-muted-foreground">
+                  크롬 확장 프로그램 0.5.0 이상이 필요해요. chrome://extensions 에서 새로고침한 뒤 이 페이지를 새로 고쳐 주세요.
+                </p>
+              )}
+              {watchPublish !== null && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin" />
+                  발행하면 글 주소를 자동으로 기록해요.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>복사하기</CardTitle>
@@ -328,4 +409,16 @@ export function BlogPreviewBody({ final, createdAt }: { final: FinalContent; cre
       )}
     </>
   )
+}
+
+async function toDataUrl(url: string): Promise<string> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`이미지를 불러오지 못했어요 (${response.status})`)
+  const blob = await response.blob()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error("이미지 변환 실패"))
+    reader.readAsDataURL(blob)
+  })
 }

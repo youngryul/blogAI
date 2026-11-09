@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 크롬 확장 프로그램은 빌드 없이 그대로 로드하는 순수 JS
+    "extension/**",
   ]),
 ]);
 

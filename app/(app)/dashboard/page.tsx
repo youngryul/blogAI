@@ -1,18 +1,27 @@
 import type { Metadata } from "next"
 import Link from "next/link"
+import { Suspense } from "react"
+import { BlogStatsCard } from "@/components/blog/blog-stats-card"
+import { Skeleton } from "@/components/ui/skeleton"
 import { CalendarDays, FilePen, FileText, Plus, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ContentTable } from "@/components/content/content-table"
 import { PageHeader } from "@/components/layout/page-header"
 import { getDashboardStats, listContents } from "@/lib/data/contents"
+import { getLinkedBlogId } from "@/lib/naver/blog"
 import { createClient } from "@/lib/supabase/server"
 
 export const metadata: Metadata = { title: "Dashboard" }
 
 export default async function DashboardPage() {
   const supabase = await createClient()
-  const [stats, recent] = await Promise.all([getDashboardStats(supabase), listContents(supabase, { limit: 10 })])
+  const { data: userData } = await supabase.auth.getUser()
+  const [stats, recent, blogId] = await Promise.all([
+    getDashboardStats(supabase),
+    listContents(supabase, { limit: 10 }),
+    getLinkedBlogId(supabase, userData.user?.id),
+  ])
 
   const cards = [
     { label: "생성한 콘텐츠", value: stats.total, icon: FileText },
@@ -34,6 +43,12 @@ export default async function DashboardPage() {
           </Button>
         }
       />
+
+      <div className="mb-6">
+        <Suspense fallback={<Skeleton className="h-44 w-full rounded-xl" />}>
+          <BlogStatsCard blogId={blogId} />
+        </Suspense>
+      </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {cards.map(({ label, value, icon: Icon }) => (

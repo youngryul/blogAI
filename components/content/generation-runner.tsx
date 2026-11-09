@@ -16,6 +16,7 @@ import { KeywordSummary } from "@/components/keyword/keyword-summary"
 import { useContentBundle, useRefreshContent } from "@/hooks/use-content"
 import { apiFetch, errorMessage } from "@/lib/api/client"
 import { PIPELINE_STEP_LABELS, PIPELINE_STEP_PROGRESS_LABELS } from "@/lib/constants"
+import { pickBestTitle } from "@/lib/content/title-pick"
 import { cn } from "@/lib/utils"
 import { PIPELINE_STEPS, type ContentBundle, type PipelineStep, type StepStatus } from "@/types"
 
@@ -76,6 +77,8 @@ function Runner({ contentId, bundle }: { contentId: string; bundle: ContentBundl
     () => bundle.content.title ?? bundle.content.title_candidates[0]?.title ?? "",
   )
   const autoStarted = useRef(false)
+  // 제목 후보가 나오면 점수가 가장 높은 제목으로 자동 확정하고 본문 작성으로 넘어간다
+  const autoTitled = useRef(false)
 
   const setStatus = (step: PipelineStep, status: StepStatus) => setStatuses((prev) => ({ ...prev, [step]: status }))
 
@@ -171,6 +174,17 @@ function Runner({ contentId, bundle }: { contentId: string; bundle: ContentBundl
     }, 0)
     return () => clearTimeout(timer)
   }, [statuses, bundle, running, failedStep, preTitleDone, blogStarted, allDone, runSequence])
+
+  // 제목 자동 선택: 제목 후보 생성이 끝나 대기 상태가 되면 바로 본문 단계로
+  useEffect(() => {
+    if (!awaitingTitle || failedStep || autoTitled.current) return
+    const best = pickBestTitle(bundle.content.title_candidates, bundle.keywordAnalysis?.main_keyword)
+    if (!best) return
+    autoTitled.current = true
+    autoStarted.current = true
+    setSelectedTitle(best.title)
+    void runSequence(POST_TITLE_STEPS, statuses, best.title)
+  }, [awaitingTitle, failedStep, bundle, statuses, runSequence])
 
   // 완료 시 에디터로 이동
   useEffect(() => {
@@ -324,7 +338,9 @@ function Runner({ contentId, bundle }: { contentId: string; bundle: ContentBundl
               <CardHeader>
                 <CardTitle>제목 선택</CardTitle>
                 <CardDescription>
-                  {blogStarted ? `확정된 제목: ${bundle.content.title ?? selectedTitle}` : "마음에 드는 제목을 고르거나 직접 다듬어 주세요."}
+                  {blogStarted
+                    ? `자동으로 고른 제목: ${bundle.content.title ?? selectedTitle} (에디터에서 바꿀 수 있어요)`
+                    : "키워드 포함·길이 기준으로 가장 좋은 제목을 자동으로 골라 본문을 씁니다."}
                 </CardDescription>
               </CardHeader>
               {!blogStarted && (

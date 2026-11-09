@@ -1,9 +1,11 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useState, type FormEvent } from "react"
-import { Loader2, Sparkles } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
+import { ExternalLink, Link2, Loader2, Sparkles, Wand2 } from "lucide-react"
 import { toast } from "sonner"
+import { BRANDCONNECT_HOME, ConnectProductPicker } from "@/components/content/connect-product-picker"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -18,6 +20,8 @@ import {
   type ProductFormValues,
 } from "@/components/product/product-fields"
 import { apiFetch, errorMessage } from "@/lib/api/client"
+import { copyText } from "@/lib/clipboard"
+import { useConnectExtension } from "@/hooks/use-connect-extension"
 import {
   BRAND_TONES,
   CONTENT_TYPE_DESCRIPTIONS,
@@ -30,6 +34,7 @@ import { cn } from "@/lib/utils"
 import {
   CONTENT_TYPES,
   CTA_STRENGTHS,
+  type ConnectProductRow,
   DISCLOSURE_POSITIONS,
   LENGTH_OPTIONS,
   type ContentRow,
@@ -41,6 +46,8 @@ import {
 } from "@/types"
 
 const NEW_PRODUCT = "__new__"
+const LINK_POLL_MS = 3000
+const LINK_POLL_TIMEOUT_MS = 10 * 60 * 1000
 
 function Segmented<T extends string>({
   value,
@@ -73,10 +80,12 @@ function Segmented<T extends string>({
 }
 
 export function NewContentForm({
-  products,
+  products = [],
+  connectProducts = [],
   initialProductId,
 }: {
-  products: ProductRow[]
+  products?: ProductRow[]
+  connectProducts?: ConnectProductRow[]
   initialProductId: string | null
 }) {
   const router = useRouter()
@@ -90,12 +99,112 @@ export function NewContentForm({
   const [ctaStrength, setCtaStrength] = useState<CtaStrength>("normal")
   const [disclosurePosition, setDisclosurePosition] = useState<DisclosurePosition>("top")
   const [submitting, setSubmitting] = useState(false)
+  // 브랜드 커넥트에서 고른 상품과 링크 발급 대기 상태
+  const [connectId, setConnectId] = useState<string | null>(null)
+  const [waitingLink, setWaitingLink] = useState(false)
+  // 확장 프로그램이 링크를 자동 발급 중인 브랜드 커넥트 상품 id (한 번에 하나)
+  const [issuingId, setIssuingId] = useState<string | null>(null)
+  const connectIdRef = useRef<string | null>(null)
+  const extension = useConnectExtension()
+  const picked = connectProducts.find((p) => p.id === connectId) ?? null
+
+  useEffect(() => {
+    connectIdRef.current = connectId
+  }, [connectId])
+  const writtenUrls = useMemo(
+    () => new Set(products.map((p) => p.product_url).filter((u): u is string => Boolean(u))),
+    [products],
+  )
 
   function selectProduct(id: string) {
     setProductId(id)
+    setConnectId(null)
+    setWaitingLink(false)
     const found = products.find((p) => p.id === id)
     setProduct(found ? productToFormValues(found) : EMPTY_PRODUCT)
   }
+
+  /** 브랜드 커넥트 상품 선택 → 같은 상품 URL 로 등록된 상품이 있으면 그 상품을 이어서 쓰고, 빈 칸만 채운다 */
+  function pickConnectProduct(cp: ConnectProductRow) {
+    const existing = cp.product_url ? products.find((p) => p.product_url === cp.product_url) : undefined
+    const base = existing ? productToFormValues(existing) : EMPTY_PRODUCT
+    setConnectId(cp.id)
+    setWaitingLink(false)
+    setProductId(existing?.id ?? NEW_PRODUCT)
+    setProduct({
+      ...base,
+      name: base.name || cp.name,
+      category: base.category || cp.category || "",
+      price: base.price || (cp.price != null ? String(cp.price) : ""),
+      productUrl: base.productUrl || cp.product_url || "",
+      imageUrl: base.imageUrl || cp.image_url || "",
+      affiliateUrl: cp.affiliate_url || base.affiliateUrl,
+    })
+    // 링크가 없으면 바로 자동 발급 (확장 프로그램이 있고, 다른 상품을 발급 중이 아닐 때)
+    if (!cp.affiliate_url && !base.affiliateUrl && extension.available && !issuingId) void autoIssue(cp)
+  }
+
+  /** 확장 프로그램이 브랜드 커넥트 화면을 몰래 열어 '링크 발급'을 대신 누른다 */
+  async function autoIssue(cp: ConnectProductRow) {
+    setIssuingId(cp.id)
+    try {
+      const result = await extension.issueLink({ key: cp.product_key, name: cp.name, pageUrl: cp.page_url })
+      const stillSelected = connectIdRef.current === cp.id
+      if (result.ok && result.affiliateUrl) {
+        if (stillSelected) {
+          const url = result.affiliateUrl
+          setProduct((prev) => ({ ...prev, affiliateUrl: url }))
+          toast.success("커넥트 링크를 자동으로 발급해 입력했어요.")
+        }
+        router.refresh()
+      } else if (result.ok) {
+        // 화면에서는 못 읽었지만 발급 응답이 저장됐을 수 있다 → 잠시 확인
+        if (stillSelected) setWaitingLink(true)
+      } else if (stillSelected) {
+        toast.error(`자동 발급 실패: ${result.message ?? "알 수 없는 오류"} 직접 발급해 주세요.`)
+      }
+    } finally {
+      setIssuingId(null)
+    }
+  }
+
+  async function openIssuePage() {
+    if (!picked) return
+    // 브랜드 커넥트 상품 찾기에서 바로 검색할 수 있게 상품명을 복사해 둔다
+    await copyText(picked.name).catch(() => {})
+    window.open(picked.page_url ?? BRANDCONNECT_HOME, "_blank", "noopener")
+    setWaitingLink(true)
+    toast.info("상품명을 복사했어요. 브랜드 커넥트에서 이 상품의 '링크 발급'을 누르면 자동으로 채워집니다.")
+  }
+
+  // 링크 발급 대기: 확장 프로그램이 발급 결과를 저장하면 쇼핑 커넥트 URL 을 채운다
+  useEffect(() => {
+    if (!waitingLink || !connectId) return
+    const startedAt = Date.now()
+    let cancelled = false
+    const timer = setInterval(async () => {
+      if (Date.now() - startedAt > LINK_POLL_TIMEOUT_MS) {
+        clearInterval(timer)
+        setWaitingLink(false)
+        return
+      }
+      try {
+        const latest = await apiFetch<ConnectProductRow>(`/api/connect-products/${connectId}`)
+        if (cancelled || !latest.affiliate_url) return
+        clearInterval(timer)
+        setWaitingLink(false)
+        setProduct((prev) => ({ ...prev, affiliateUrl: latest.affiliate_url ?? prev.affiliateUrl }))
+        toast.success("커넥트 링크가 발급되어 입력했어요.")
+        router.refresh()
+      } catch {
+        // 일시적인 오류는 다음 주기에 다시 시도
+      }
+    }, LINK_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [waitingLink, connectId, router])
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -130,12 +239,74 @@ export function NewContentForm({
 
   return (
     <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[1fr_380px]">
+      <div className="min-w-0 space-y-6">
+      <ConnectProductPicker
+        products={connectProducts}
+        selectedId={connectId}
+        writtenUrls={writtenUrls}
+        onPick={pickConnectProduct}
+      />
       <Card>
         <CardHeader>
           <CardTitle>상품 정보</CardTitle>
           <CardDescription>입력한 정보만 사실로 사용됩니다. 확인되지 않은 기능이나 효과는 글에 쓰이지 않아요.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {picked && (
+            <Alert>
+              <Link2 />
+              <AlertTitle>
+                {product.affiliateUrl ? "커넥트 링크가 준비됐어요" : "이 상품은 아직 커넥트 링크가 없어요"}
+              </AlertTitle>
+              <AlertDescription className="space-y-2">
+                {product.affiliateUrl ? (
+                  <p>상품 설명과 주요 특징은 상세 페이지에서 확인해 채워 주세요. AI 는 입력한 정보만 사실로 씁니다.</p>
+                ) : issuingId === picked.id ? (
+                  <p className="flex items-center gap-2">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    확장 프로그램이 브랜드 커넥트에서 링크를 발급하는 중이에요… (보통 10~20초)
+                  </p>
+                ) : waitingLink ? (
+                  <p className="flex items-center gap-2">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    링크 발급을 기다리는 중… 브랜드 커넥트에서 &lsquo;링크 발급&rsquo;을 누르면 자동으로 채워집니다. 발급된 링크를
+                    아래 칸에 직접 붙여 넣어도 돼요.
+                  </p>
+                ) : extension.available ? (
+                  <p>&lsquo;링크 자동 발급&rsquo;을 누르면 확장 프로그램이 브랜드 커넥트에서 대신 발급해 아래 칸에 넣어 줍니다.</p>
+                ) : (
+                  <p>
+                    브랜드 커넥트에서 링크를 발급하면 확장 프로그램이 읽어 아래 쇼핑 커넥트 URL 에 자동으로 넣어 줍니다. 확장
+                    프로그램을 0.4.0 이상으로 새로고침하면 자동 발급도 쓸 수 있어요.
+                  </p>
+                )}
+                {!product.affiliateUrl && issuingId !== picked.id && (
+                  <div className="flex flex-wrap gap-2">
+                    {extension.available && (
+                      <Button type="button" size="sm" onClick={() => void autoIssue(picked)} disabled={issuingId !== null}>
+                        <Wand2 />
+                        링크 자동 발급
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={extension.available ? "outline" : "default"}
+                      onClick={openIssuePage}
+                    >
+                      <ExternalLink />
+                      {waitingLink ? "브랜드 커넥트 다시 열기" : extension.available ? "직접 발급하기" : "브랜드 커넥트에서 링크 발급"}
+                    </Button>
+                    {waitingLink && (
+                      <Button type="button" size="sm" variant="ghost" onClick={() => setWaitingLink(false)}>
+                        기다리지 않기
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
           {products.length > 0 && (
             <div className="space-y-2">
               <Label>상품 선택</Label>
@@ -157,6 +328,7 @@ export function NewContentForm({
           <ProductFields values={product} onChange={setProduct} />
         </CardContent>
       </Card>
+      </div>
 
       <div className="space-y-6">
         <Card>
