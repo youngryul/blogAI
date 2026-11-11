@@ -1,6 +1,6 @@
 import "server-only"
 
-import { generateImage, generateStructured, type AICallContext } from "@/lib/ai/client"
+import { generateImage, generateStructured, type AICallContext, type ReferenceImage } from "@/lib/ai/client"
 import {
   mockBlogDraft,
   mockContentStrategy,
@@ -43,6 +43,7 @@ import {
 } from "@/lib/constants"
 import { buildFinalContent, defaultCtaText, normalizeHashtag, toBlogContent, type FinalContent } from "@/lib/content/format"
 import { lintContent, mergeIssues } from "@/lib/content/lint"
+import { findProductImage } from "@/lib/content/product-image"
 import { getContent, getProduct, getSections, loadContentBundle } from "@/lib/data/contents"
 import { getKeywordProvider } from "@/lib/keywords/provider"
 import { PIPELINE_STEPS } from "@/types"
@@ -58,6 +59,7 @@ import type {
   PipelineStep,
   ProductAnalysis,
   ProductAnalysisRow,
+  ProductRow,
   ReviewMetricsJson,
   StepStatus,
   TitleCandidate,
@@ -353,6 +355,7 @@ export async function runTitles(ctx: StepContext): Promise<TitleCandidate[]> {
       schemaName: "title_candidates",
       prompt: createTitlePrompt({
         productName: product.name,
+        price: product.price,
         keywords,
         strategy,
         contentType: content.content_type,
@@ -448,7 +451,7 @@ export async function runBlog(ctx: StepContext, options: { title?: string | null
 export async function runImagePrompts(ctx: StepContext): Promise<ContentSectionRow[]> {
   return runStep(ctx, "image_prompts", async () => {
     const content = await getContent(ctx.supabase, ctx.contentId)
-    const product = await getProduct(ctx.supabase, content.product_id)
+    const product = await ensureProductImage(ctx, await getProduct(ctx.supabase, content.product_id))
     const sections = await getSections(ctx.supabase, ctx.contentId)
     if (!sections.length) throw badRequest("본문이 먼저 생성되어야 합니다.")
     const strategy = content.strategy_id ? await requireStrategy(ctx, content) : null
@@ -524,6 +527,55 @@ async function countRemainingImages(ctx: StepContext): Promise<number> {
   return sections.filter((s) => s.image_prompt && !s.image_url).length
 }
 
+/**
+ * 상품 대표 이미지가 비어 있으면 ① 같은 상품의 브랜드 커넥트 수집 이미지 ② 상품 URL·커넥트 링크 페이지의 og:image
+ * 순으로 찾아 상품에 저장한다. 한 번 찾으면 다음 글부터는 바로 재사용되고 상품 화면에도 보인다.
+ */
+async function ensureProductImage(ctx: StepContext, product: ProductRow): Promise<ProductRow> {
+  if (product.image_url?.trim()) return product
+
+  let imageUrl: string | null = null
+  if (product.product_url || product.affiliate_url) {
+    const { data } = await ctx.supabase
+      .from("connect_products")
+      .select("image_url")
+      .or(
+        [
+          product.product_url ? `product_url.eq."${product.product_url}"` : null,
+          product.affiliate_url ? `affiliate_url.eq."${product.affiliate_url}"` : null,
+        ]
+          .filter(Boolean)
+          .join(","),
+      )
+      .not("image_url", "is", null)
+      .limit(1)
+      .maybeSingle()
+    imageUrl = (data as { image_url: string | null } | null)?.image_url ?? null
+  }
+  imageUrl ??= await findProductImage(product)
+  if (!imageUrl) return product
+
+  const { error } = await ctx.supabase.from("products").update({ image_url: imageUrl }).eq("id", product.id)
+  if (error) console.warn("[image] 상품 대표 이미지 저장 실패", error.message)
+  return { ...product, image_url: imageUrl }
+}
+
+/** 상품 대표 이미지를 내려받는다. 실패하거나 너무 크면 null (참조 없이 생성) */
+async function fetchReferenceImage(url: string | null | undefined): Promise<ReferenceImage | null> {
+  if (!url?.trim()) return null
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+    if (!response.ok) return null
+    const contentType = response.headers.get("content-type")?.split(";")[0].trim() ?? "image/jpeg"
+    if (!/^image\/(png|jpe?g|webp)$/.test(contentType)) return null
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.byteLength === 0 || buffer.byteLength > 20 * 1024 * 1024) return null
+    return { buffer, contentType: contentType === "image/jpg" ? "image/jpeg" : contentType }
+  } catch {
+    return null
+  }
+}
+
 async function generateSectionImage(
   ctx: StepContext,
   section: ContentSectionRow,
@@ -532,7 +584,14 @@ async function generateSectionImage(
   const prompt = (promptOverride ?? section.image_prompt)?.trim()
   if (!prompt) throw badRequest("이미지 프롬프트가 없습니다.")
 
-  const generated = await generateImage(ctx, buildFinalImagePrompt(prompt))
+  // 실제 상품 사진이 있으면 참조 이미지로 사용 → 생성 컷에 '진짜 그 상품'이 등장 (구매 전환에 가장 큰 영향)
+  const content = await getContent(ctx.supabase, ctx.contentId)
+  const product = await ensureProductImage(ctx, await getProduct(ctx.supabase, content.product_id))
+  const referenceImage = await fetchReferenceImage(product.image_url)
+  const generated = await generateImage(ctx, buildFinalImagePrompt(prompt, { withProductReference: Boolean(referenceImage) }), {
+    referenceImage,
+    fallbackPrompt: buildFinalImagePrompt(prompt),
+  })
   const storagePath = `${ctx.userId}/${ctx.contentId}/${section.id}-${Date.now()}.${generated.extension}`
   const bucket = ctx.supabase.storage.from(STORAGE_BUCKETS.contentImages)
   const { error: uploadError } = await bucket.upload(storagePath, generated.buffer, {

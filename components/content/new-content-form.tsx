@@ -96,7 +96,7 @@ export function NewContentForm({
   const [mainKeyword, setMainKeyword] = useState("")
   const [brandTone, setBrandTone] = useState<string>(BRAND_TONES[0])
   const [lengthOption, setLengthOption] = useState<LengthOption>("normal")
-  const [ctaStrength, setCtaStrength] = useState<CtaStrength>("normal")
+  const [ctaStrength, setCtaStrength] = useState<CtaStrength>("strong")
   const [disclosurePosition, setDisclosurePosition] = useState<DisclosurePosition>("top")
   const [submitting, setSubmitting] = useState(false)
   // 브랜드 커넥트에서 고른 상품과 링크 발급 대기 상태

@@ -79,7 +79,8 @@ ${input.mode === "optimize" ? OPTIMIZE_TASK : EVALUATE_TASK}
 - metrics 각 항목은 0~100 정수:
   searchIntentFit(검색 의도 적합도), keywordNaturalness(키워드 자연스러움), titleFit(제목 적합도),
   readability(본문 가독성), productAccuracy(상품 정보 정확성 — 입력 정보 밖의 주장이 있으면 크게 감점),
-  adTone(광고성 정도 — 광고 느낌이 적고 정보 중심일수록 높음), ctaAppropriateness(CTA 적절성)
+  adTone(설득 품질 — 허위·과장 없이 공감·이득·걱정 해소로 자연스럽게 구매 욕구를 만들수록 높음, 근거 없는 과장은 크게 감점),
+  ctaAppropriateness(CTA 적절성 — 링크 직전에 클릭할 이유가 분명하고 압박 없이 행동을 유도할수록 높음)
 - score: 종합 점수(0~100 정수). 가중치: 상품 정보 정확성·검색 의도 적합도를 높게.
 - issues: message 는 어느 부분이 왜 문제인지 구체적으로 한국어로. 문제 없으면 빈 배열.
 ${input.mode === "optimize" ? OPTIMIZE_RULES : ""}

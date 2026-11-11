@@ -13,9 +13,9 @@ import type {
 export const DEFAULT_DISCLOSURE =
   "이 포스팅은 네이버 쇼핑 커넥트 활동의 일환으로, 판매 발생 시 수수료를 제공받습니다."
 
-export const DEFAULT_MAX_AFFILIATE_LINKS = 2
+export const DEFAULT_MAX_AFFILIATE_LINKS = 3
 export const DEFAULT_IMAGE_COUNT = 4
-export const DEFAULT_AFFILIATE_LINK_LABEL = "상품 확인하기"
+export const DEFAULT_AFFILIATE_LINK_LABEL = "지금 가격·혜택 확인하기"
 
 export const CONTENT_STATUS_LABELS: Record<ContentStatus, string> = {
   draft: "초안",

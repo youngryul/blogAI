@@ -1,6 +1,6 @@
 import "server-only"
 
-import OpenAI from "openai"
+import OpenAI, { toFile } from "openai"
 import { zodTextFormat } from "openai/helpers/zod"
 import type { z } from "zod"
 import { ApiError } from "@/lib/api/errors"
@@ -148,8 +148,64 @@ export interface GeneratedImage {
   model: string
 }
 
-/** 이미지 생성 (Mock Mode 에서는 SVG 플레이스홀더) */
-export async function generateImage(ctx: AICallContext, prompt: string): Promise<GeneratedImage> {
+export interface ReferenceImage {
+  buffer: Buffer
+  contentType: string
+}
+
+/**
+ * 이미지 생성 (Mock Mode 에서는 SVG 플레이스홀더).
+ * referenceImage 가 있으면 실제 상품 사진을 참조(images.edit)해 '진짜 그 상품'이 등장하는 실사 컷을 만든다.
+ * 참조 생성이 실패하면 일반 생성으로 자동 폴백한다.
+ */
+export async function generateImage(
+  ctx: AICallContext,
+  prompt: string,
+  options: { referenceImage?: ReferenceImage | null; fallbackPrompt?: string } = {},
+): Promise<GeneratedImage> {
+  if (options.referenceImage && !isAIMockMode()) {
+    try {
+      return await generateImageFromReference(ctx, prompt, options.referenceImage)
+    } catch (error) {
+      console.warn("[image] 상품 참조 이미지 생성 실패 — 일반 생성으로 폴백", error)
+    }
+    return generateImage(ctx, options.fallbackPrompt ?? prompt)
+  }
+  return generateImageFromText(ctx, prompt)
+}
+
+async function generateImageFromReference(
+  ctx: AICallContext,
+  prompt: string,
+  reference: ReferenceImage,
+): Promise<GeneratedImage> {
+  const openai = getOpenAI()
+  const model = aiConfig.imageModel
+  const extension = reference.contentType.includes("png") ? "png" : reference.contentType.includes("webp") ? "webp" : "jpg"
+  const result = await openai.images.edit({
+    model,
+    image: await toFile(reference.buffer, `product.${extension}`, { type: reference.contentType }),
+    prompt,
+    n: 1,
+    size: "1536x1024",
+    quality: aiConfig.imageQuality,
+    output_format: "jpeg",
+  })
+  const b64 = result.data?.[0]?.b64_json
+  if (!b64) throw new Error("이미지 데이터가 비어 있습니다.")
+
+  await recordUsage(ctx, {
+    action: "image_generation",
+    model,
+    inputTokens: result.usage?.input_tokens ?? 0,
+    outputTokens: result.usage?.output_tokens ?? 0,
+    imageCount: 1,
+    estimatedCost: estimateImageCost(aiConfig.imageQuality),
+  })
+  return { buffer: Buffer.from(b64, "base64"), contentType: "image/jpeg", extension: "jpg", model }
+}
+
+async function generateImageFromText(ctx: AICallContext, prompt: string): Promise<GeneratedImage> {
   if (isAIMockMode()) {
     await sleep(600)
     await recordUsage(ctx, { action: "image_generation", model: "mock", imageCount: 1 })

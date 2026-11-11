@@ -51,9 +51,9 @@ export const contentCreateSchema = z.object({
   targetReader: optionalText(300),
   brandTone: optionalText(100),
   lengthOption: z.enum(LENGTH_OPTIONS).default("normal"),
-  ctaStrength: z.enum(CTA_STRENGTHS).default("normal"),
+  ctaStrength: z.enum(CTA_STRENGTHS).default("strong"),
   disclosurePosition: z.enum(DISCLOSURE_POSITIONS).default("top"),
-  maxAffiliateLinks: z.number().int().min(1).max(5).default(2),
+  maxAffiliateLinks: z.number().int().min(1).max(5).default(3),
 })
 export type ContentCreateInput = z.input<typeof contentCreateSchema>
 
